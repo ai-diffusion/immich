@@ -1,11 +1,51 @@
 import type { Conversation, Format } from './types';
 
+// ── Filename & frontmatter helpers ─────────────────────────────────────────
+
+export function buildFilename(conv: Conversation, ext: string): string {
+  const date = conv.exportedAt.slice(0, 10); // YYYY-MM-DD
+  const platform = conv.platform;
+  const model = conv.model ? ` ${conv.model}` : '';
+  const title = conv.title
+    .replace(/[/\\:*?"<>|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 60);
+  return `${date} ${platform}${model} ${title}.${ext}`;
+}
+
+function yamlFrontmatter(conv: Conversation): string {
+  const lines = [
+    '---',
+    `title: "${conv.title.replace(/"/g, '\\"')}"`,
+    `date: ${conv.exportedAt.slice(0, 10)}`,
+    `time: ${conv.exportedAt.slice(11, 19)}`,
+    `platform: ${conv.platform}`,
+  ];
+  if (conv.model) lines.push(`model: ${conv.model}`);
+  lines.push(
+    `url: "${conv.url}"`,
+    `messages: ${conv.messages.length}`,
+    `tags: [ai-chat, ${conv.platform.toLowerCase().replace(/\s+/g, '-')}${conv.model ? ', ' + conv.model.toLowerCase().replace(/[\s.]/g, '-') : ''}]`,
+    'source: Complete Recall',
+    '---',
+    '',
+  );
+  return lines.join('\n');
+}
+
+// ── Format converters ───────────────────────────────────────────────────────
+
 export function toMarkdown(conv: Conversation): string {
-  let md = `# ${conv.title}\n\n`;
-  md += `**Platform:** ${conv.platform}  \n`;
-  md += `**URL:** ${conv.url}  \n`;
-  md += `**Exported:** ${conv.exportedAt}\n\n`;
-  md += `---\n\n`;
+  let md = yamlFrontmatter(conv);
+  md += `# ${conv.title}\n\n`;
+
+  const meta: string[] = [`**Platform:** ${conv.platform}`];
+  if (conv.model) meta.push(`**Model:** ${conv.model}`);
+  meta.push(`**URL:** ${conv.url}`);
+  meta.push(`**Exported:** ${conv.exportedAt}`);
+  meta.push(`**Messages:** ${conv.messages.length}`);
+  md += meta.join('  \n') + '\n\n---\n\n';
 
   conv.messages.forEach((msg) => {
     const speaker = msg.role === 'user' ? 'You' : 'AI';
@@ -16,15 +56,17 @@ export function toMarkdown(conv: Conversation): string {
 }
 
 export function toPlainText(conv: Conversation): string {
-  let text = `${conv.title}\n\n`;
+  let text = `${conv.title}\n${'='.repeat(conv.title.length)}\n\n`;
   text += `Platform: ${conv.platform}\n`;
+  if (conv.model) text += `Model: ${conv.model}\n`;
   text += `URL: ${conv.url}\n`;
-  text += `Exported: ${conv.exportedAt}\n\n`;
-  text += `---\n\n`;
+  text += `Exported: ${conv.exportedAt}\n`;
+  text += `Messages: ${conv.messages.length}\n\n`;
+  text += `${'─'.repeat(60)}\n\n`;
 
   conv.messages.forEach((msg) => {
     const speaker = msg.role === 'user' ? 'You' : 'AI';
-    text += `${speaker}:\n\n${msg.content}\n\n---\n\n`;
+    text += `${speaker}:\n\n${msg.content}\n\n${'─'.repeat(60)}\n\n`;
   });
 
   return text.trim();
@@ -35,14 +77,19 @@ export function toJSON(conv: Conversation): string {
 }
 
 export function toHTML(conv: Conversation): string {
-  const escapeHtml = (s: string) =>
+  const escape = (s: string) =>
     s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  const metaParts = [`${escape(conv.platform)}`];
+  if (conv.model) metaParts.push(escape(conv.model));
+  metaParts.push(`<a href="${escape(conv.url)}">${escape(conv.url)}</a>`);
+  metaParts.push(escape(conv.exportedAt));
 
   const messagesHtml = conv.messages
     .map((msg) => {
       const roleClass = msg.role;
       const roleName = msg.role === 'user' ? 'You' : 'AI';
-      const contentHtml = escapeHtml(msg.content).replace(/\n/g, '<br>');
+      const contentHtml = escape(msg.content).replace(/\n/g, '<br>');
       return `
       <div class="message ${roleClass}">
         <div class="label">${roleName}</div>
@@ -56,7 +103,7 @@ export function toHTML(conv: Conversation): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${escapeHtml(conv.title)}</title>
+  <title>${escape(conv.title)}</title>
   <style>
     body { background: #1a1a1a; color: #e8e8e8; font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 24px; line-height: 1.6; }
     h1 { color: #a5b4fc; font-size: 1.4rem; margin-bottom: 6px; }
@@ -72,10 +119,8 @@ export function toHTML(conv: Conversation): string {
   </style>
 </head>
 <body>
-  <h1>${escapeHtml(conv.title)}</h1>
-  <div class="meta">
-    ${escapeHtml(conv.platform)} &bull; <a href="${escapeHtml(conv.url)}">${escapeHtml(conv.url)}</a> &bull; ${escapeHtml(conv.exportedAt)}
-  </div>
+  <h1>${escape(conv.title)}</h1>
+  <div class="meta">${metaParts.join(' &bull; ')}</div>
   ${messagesHtml}
 </body>
 </html>`;

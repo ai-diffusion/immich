@@ -12,5 +12,19 @@ registerExtractor({
   },
   proseSelectors: ['[class*="prose"]', '.font-claude-message', '[class*="markdown"]'],
   scrollContainerHint: 'main',
+  modelOf: () => {
+    const sel = [
+      '[data-testid="model-selector-dropdown"] span',
+      'button[data-testid*="model"] span',
+      '[class*="model-name"]',
+      'header [class*="model"]',
+    ];
+    for (const s of sel) {
+      const el = document.querySelector(s);
+      const text = (el as HTMLElement | null)?.innerText?.trim();
+      if (text && text.length < 40) return text;
+    }
+    return null;
+  },
   assetFilter: (el) => !el.closest('button, [class*="avatar"]'),
 });

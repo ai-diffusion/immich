@@ -1,5 +1,5 @@
 import type { Asset, Conversation, Format } from '../lib/types';
-import { convert } from '../lib/formatters';
+import { buildFilename, convert } from '../lib/formatters';
 
 let currentConversation: Conversation | null = null;
 let currentExportDir = 'chat-export';
@@ -8,13 +8,16 @@ let currentTabId: number | null = null;
 const EXTRACT_TIMEOUT_MS = 90_000; // auto-scroll on long conversations can take ~40s
 
 function getExtension(format: Format): string {
-  const map: Record<Format, string> = {
-    markdown: 'md',
-    text: 'txt',
-    json: 'json',
-    html: 'html',
-  };
+  const map: Record<Format, string> = { markdown: 'md', text: 'txt', json: 'json', html: 'html' };
   return map[format];
+}
+
+function getFilename(format: Format): string {
+  if (!currentConversation) {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    return `chat-export-${ts}.${getExtension(format)}`;
+  }
+  return buildFilename(currentConversation, getExtension(format));
 }
 
 function truncate(text: string, maxLength = 200): string {
@@ -152,9 +155,7 @@ async function handleDownload(): Promise<void> {
   const formatSelect = document.getElementById('format') as HTMLSelectElement;
   const format = formatSelect.value as Format;
   const content = convert(currentConversation, format);
-  const extension = getExtension(format);
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const filename = `chat-export-${timestamp}.${extension}`;
+  const filename = getFilename(format);
 
   const blob = new Blob([content], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
@@ -171,6 +172,29 @@ async function handleDownload(): Promise<void> {
   if (includeAssets?.checked && assets.length) {
     await downloadAssets(assets);
   }
+}
+
+async function handleObsidian(): Promise<void> {
+  if (!currentConversation) return;
+  const content = convert(currentConversation, 'markdown');
+  const filename = getFilename('markdown').replace(/\.md$/, '');
+  // obsidian://new creates a note directly in the vault.
+  // content is URL-encoded; very large chats will exceed URL limits — we
+  // fall back to a plain download so the user can drag it into the vault.
+  const MAX_OBSIDIAN_CONTENT = 50_000;
+  if (content.length > MAX_OBSIDIAN_CONTENT) {
+    setStatus('Chat too large for Obsidian URI — downloading as .md instead.', 'info');
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `${filename}.md`;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+    return;
+  }
+  const uri = `obsidian://new?file=${encodeURIComponent(filename)}&content=${encodeURIComponent(content)}`;
+  window.open(uri, '_blank');
+  setStatus('Sent to Obsidian. If nothing opened, make sure Obsidian is running.', 'info');
 }
 
 async function handleCopy(): Promise<void> {
@@ -204,13 +228,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   const loadingEl = document.getElementById('loading') as HTMLDivElement;
   const previewEl = document.getElementById('preview') as HTMLDivElement;
   const downloadBtn = document.getElementById('download') as HTMLButtonElement;
+  const obsidianBtn = document.getElementById('obsidian') as HTMLButtonElement;
   const copyBtn = document.getElementById('copy') as HTMLButtonElement;
 
   previewEl.style.display = 'none';
   downloadBtn.style.display = 'none';
+  obsidianBtn.style.display = 'none';
   copyBtn.style.display = 'none';
 
   downloadBtn.addEventListener('click', handleDownload);
+  obsidianBtn.addEventListener('click', handleObsidian);
   copyBtn.addEventListener('click', handleCopy);
 
   chrome.runtime.onMessage.addListener((msg) => {
@@ -270,5 +297,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   renderPreview(conv);
   downloadBtn.style.display = 'block';
+  obsidianBtn.style.display = 'block';
   copyBtn.style.display = 'block';
 });

@@ -18,6 +18,7 @@ export interface Asset {
 export interface Conversation {
   title: string;
   platform: string;
+  model?: string;
   url: string;
   messages: Message[];
   exportedAt: string;

@@ -302,6 +302,7 @@ ${el.innerText}
     });
     const turns = findTurns(config);
     const title = (config.titleOf?.() ?? document.title).trim() || "conversation";
+    const model = config.modelOf?.() ?? null;
     const exportDirName = `chat-export-${slugify(title)}`;
     const { assets, markerFor } = collectAssets(turns, config, exportDirName);
     let messages;
@@ -315,6 +316,7 @@ ${el.innerText}
       conversation: {
         title,
         platform: config.platform,
+        ...model ? { model } : {},
         url: window.location.href,
         messages,
         exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -351,6 +353,20 @@ ${el.innerText}
     },
     proseSelectors: ['[class*="prose"]', ".font-claude-message", '[class*="markdown"]'],
     scrollContainerHint: "main",
+    modelOf: () => {
+      const sel = [
+        '[data-testid="model-selector-dropdown"] span',
+        'button[data-testid*="model"] span',
+        '[class*="model-name"]',
+        'header [class*="model"]'
+      ];
+      for (const s of sel) {
+        const el = document.querySelector(s);
+        const text = el?.innerText?.trim();
+        if (text && text.length < 40) return text;
+      }
+      return null;
+    },
     assetFilter: (el) => !el.closest('button, [class*="avatar"]')
   });
 })();

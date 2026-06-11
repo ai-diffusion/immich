@@ -55,6 +55,21 @@ registerExtractor({
     '[class*="whitespace-pre-wrap"]',
   ],
   scrollContainerHint: 'main',
+  modelOf: () => {
+    // Model switcher button shows the active model name
+    const sel = [
+      '[data-testid="model-switcher-dropdown-button"]',
+      'button[aria-haspopup="listbox"] span',
+      '[class*="model-switcher"] span',
+      'nav span[class*="model"]',
+    ];
+    for (const s of sel) {
+      const el = document.querySelector(s);
+      const text = (el as HTMLElement | null)?.innerText?.trim();
+      if (text && text.length < 40) return text;
+    }
+    return null;
+  },
   extractAttachmentTexts: attachmentTexts,
   assetFilter: (el) => !el.closest('button, [class*="avatar"]'),
 });

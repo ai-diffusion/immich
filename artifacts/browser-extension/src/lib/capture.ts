@@ -9,6 +9,7 @@ export interface PlatformConfig {
   proseSelectors: string[];
   scrollContainerHint?: string;
   titleOf?: () => string;
+  modelOf?: () => string | null;
   extractAttachmentTexts?: (turn: Element, proseRoots: Element[]) => string[];
   assetFilter?: (el: Element) => boolean;
 }
@@ -310,6 +311,7 @@ async function captureConversation(config: PlatformConfig): Promise<{
 
   const turns = findTurns(config);
   const title = (config.titleOf?.() ?? document.title).trim() || 'conversation';
+  const model = config.modelOf?.() ?? null;
   const exportDirName = `chat-export-${slugify(title)}`;
   const { assets, markerFor } = collectAssets(turns, config, exportDirName);
 
@@ -325,6 +327,7 @@ async function captureConversation(config: PlatformConfig): Promise<{
     conversation: {
       title,
       platform: config.platform,
+      ...(model ? { model } : {}),
       url: window.location.href,
       messages,
       exportedAt: new Date().toISOString(),

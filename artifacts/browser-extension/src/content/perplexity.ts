@@ -14,5 +14,19 @@ registerExtractor({
   },
   proseSelectors: ['.prose', '[class*="prose"]'],
   scrollContainerHint: 'main',
+  modelOf: () => {
+    const sel = [
+      '[data-testid="model-selector"] span',
+      'button[aria-label*="model" i] span',
+      '[class*="ModelPill"] span',
+      '[class*="model-selector"] span',
+    ];
+    for (const s of sel) {
+      const el = document.querySelector(s);
+      const text = (el as HTMLElement | null)?.innerText?.trim();
+      if (text && text.length < 40) return text;
+    }
+    return null;
+  },
   assetFilter: (el) => !el.closest('button, [class*="avatar"]'),
 });

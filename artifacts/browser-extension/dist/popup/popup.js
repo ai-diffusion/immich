@@ -1,20 +1,43 @@
 "use strict";
 (() => {
   // src/lib/formatters.ts
+  function buildFilename(conv, ext) {
+    const date = conv.exportedAt.slice(0, 10);
+    const platform = conv.platform;
+    const model = conv.model ? ` ${conv.model}` : "";
+    const title = conv.title.replace(/[/\\:*?"<>|]/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
+    return `${date} ${platform}${model} ${title}.${ext}`;
+  }
+  function yamlFrontmatter(conv) {
+    const lines = [
+      "---",
+      `title: "${conv.title.replace(/"/g, '\\"')}"`,
+      `date: ${conv.exportedAt.slice(0, 10)}`,
+      `time: ${conv.exportedAt.slice(11, 19)}`,
+      `platform: ${conv.platform}`
+    ];
+    if (conv.model) lines.push(`model: ${conv.model}`);
+    lines.push(
+      `url: "${conv.url}"`,
+      `messages: ${conv.messages.length}`,
+      `tags: [ai-chat, ${conv.platform.toLowerCase().replace(/\s+/g, "-")}${conv.model ? ", " + conv.model.toLowerCase().replace(/[\s.]/g, "-") : ""}]`,
+      "source: Complete Recall",
+      "---",
+      ""
+    );
+    return lines.join("\n");
+  }
   function toMarkdown(conv) {
-    let md = `# ${conv.title}
+    let md = yamlFrontmatter(conv);
+    md += `# ${conv.title}
 
 `;
-    md += `**Platform:** ${conv.platform}  
-`;
-    md += `**URL:** ${conv.url}  
-`;
-    md += `**Exported:** ${conv.exportedAt}
-
-`;
-    md += `---
-
-`;
+    const meta = [`**Platform:** ${conv.platform}`];
+    if (conv.model) meta.push(`**Model:** ${conv.model}`);
+    meta.push(`**URL:** ${conv.url}`);
+    meta.push(`**Exported:** ${conv.exportedAt}`);
+    meta.push(`**Messages:** ${conv.messages.length}`);
+    md += meta.join("  \n") + "\n\n---\n\n";
     conv.messages.forEach((msg) => {
       const speaker = msg.role === "user" ? "You" : "AI";
       md += `**${speaker}:**
@@ -29,16 +52,21 @@ ${msg.content}
   }
   function toPlainText(conv) {
     let text = `${conv.title}
+${"=".repeat(conv.title.length)}
 
 `;
     text += `Platform: ${conv.platform}
 `;
+    if (conv.model) text += `Model: ${conv.model}
+`;
     text += `URL: ${conv.url}
 `;
     text += `Exported: ${conv.exportedAt}
+`;
+    text += `Messages: ${conv.messages.length}
 
 `;
-    text += `---
+    text += `${"\u2500".repeat(60)}
 
 `;
     conv.messages.forEach((msg) => {
@@ -47,7 +75,7 @@ ${msg.content}
 
 ${msg.content}
 
----
+${"\u2500".repeat(60)}
 
 `;
     });
@@ -57,11 +85,15 @@ ${msg.content}
     return JSON.stringify(conv, null, 2);
   }
   function toHTML(conv) {
-    const escapeHtml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const escape = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const metaParts = [`${escape(conv.platform)}`];
+    if (conv.model) metaParts.push(escape(conv.model));
+    metaParts.push(`<a href="${escape(conv.url)}">${escape(conv.url)}</a>`);
+    metaParts.push(escape(conv.exportedAt));
     const messagesHtml = conv.messages.map((msg) => {
       const roleClass = msg.role;
       const roleName = msg.role === "user" ? "You" : "AI";
-      const contentHtml = escapeHtml(msg.content).replace(/\n/g, "<br>");
+      const contentHtml = escape(msg.content).replace(/\n/g, "<br>");
       return `
       <div class="message ${roleClass}">
         <div class="label">${roleName}</div>
@@ -73,7 +105,7 @@ ${msg.content}
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${escapeHtml(conv.title)}</title>
+  <title>${escape(conv.title)}</title>
   <style>
     body { background: #1a1a1a; color: #e8e8e8; font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 24px; line-height: 1.6; }
     h1 { color: #a5b4fc; font-size: 1.4rem; margin-bottom: 6px; }
@@ -89,10 +121,8 @@ ${msg.content}
   </style>
 </head>
 <body>
-  <h1>${escapeHtml(conv.title)}</h1>
-  <div class="meta">
-    ${escapeHtml(conv.platform)} &bull; <a href="${escapeHtml(conv.url)}">${escapeHtml(conv.url)}</a> &bull; ${escapeHtml(conv.exportedAt)}
-  </div>
+  <h1>${escape(conv.title)}</h1>
+  <div class="meta">${metaParts.join(" &bull; ")}</div>
   ${messagesHtml}
 </body>
 </html>`;
@@ -118,13 +148,15 @@ ${msg.content}
   var currentTabId = null;
   var EXTRACT_TIMEOUT_MS = 9e4;
   function getExtension(format) {
-    const map = {
-      markdown: "md",
-      text: "txt",
-      json: "json",
-      html: "html"
-    };
+    const map = { markdown: "md", text: "txt", json: "json", html: "html" };
     return map[format];
+  }
+  function getFilename(format) {
+    if (!currentConversation) {
+      const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      return `chat-export-${ts}.${getExtension(format)}`;
+    }
+    return buildFilename(currentConversation, getExtension(format));
   }
   function truncate(text, maxLength = 200) {
     if (text.length <= maxLength) return text;
@@ -233,9 +265,7 @@ ${msg.content}
     const formatSelect = document.getElementById("format");
     const format = formatSelect.value;
     const content = convert(currentConversation, format);
-    const extension = getExtension(format);
-    const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const filename = `chat-export-${timestamp}.${extension}`;
+    const filename = getFilename(format);
     const blob = new Blob([content], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -250,6 +280,28 @@ ${msg.content}
     if (includeAssets?.checked && assets.length) {
       await downloadAssets(assets);
     }
+  }
+  async function handleObsidian() {
+    if (!currentConversation) return;
+    const content = convert(currentConversation, "markdown");
+    const filename = getFilename("markdown").replace(/\.md$/, "");
+    const MAX_OBSIDIAN_CONTENT = 5e4;
+    if (content.length > MAX_OBSIDIAN_CONTENT) {
+      setStatus("Chat too large for Obsidian URI \u2014 downloading as .md instead.", "info");
+      const blob = new Blob([content], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${filename}.md`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      return;
+    }
+    const uri = `obsidian://new?file=${encodeURIComponent(filename)}&content=${encodeURIComponent(content)}`;
+    window.open(uri, "_blank");
+    setStatus("Sent to Obsidian. If nothing opened, make sure Obsidian is running.", "info");
   }
   async function handleCopy() {
     if (!currentConversation) return;
@@ -272,11 +324,14 @@ ${msg.content}
     const loadingEl = document.getElementById("loading");
     const previewEl = document.getElementById("preview");
     const downloadBtn = document.getElementById("download");
+    const obsidianBtn = document.getElementById("obsidian");
     const copyBtn = document.getElementById("copy");
     previewEl.style.display = "none";
     downloadBtn.style.display = "none";
+    obsidianBtn.style.display = "none";
     copyBtn.style.display = "none";
     downloadBtn.addEventListener("click", handleDownload);
+    obsidianBtn.addEventListener("click", handleObsidian);
     copyBtn.addEventListener("click", handleCopy);
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === "EXTRACT_PROGRESS") {
@@ -323,6 +378,7 @@ ${msg.content}
     }
     renderPreview(conv);
     downloadBtn.style.display = "block";
+    obsidianBtn.style.display = "block";
     copyBtn.style.display = "block";
   });
 })();
