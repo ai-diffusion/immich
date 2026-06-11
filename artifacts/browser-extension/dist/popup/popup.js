@@ -1,6 +1,31 @@
 "use strict";
 (() => {
   // src/lib/formatters.ts
+  function countWords(text) {
+    return text.trim().split(/\s+/).filter(Boolean).length;
+  }
+  function estimateTokens(text) {
+    return Math.round(text.length / 4);
+  }
+  function computeStats(conv) {
+    let totalWords = 0;
+    let totalChars = 0;
+    let userMessages = 0;
+    let assistantMessages = 0;
+    for (const msg of conv.messages) {
+      totalWords += countWords(msg.content);
+      totalChars += msg.content.length;
+      if (msg.role === "user") userMessages++;
+      else assistantMessages++;
+    }
+    return {
+      totalWords,
+      totalChars,
+      estimatedTokens: estimateTokens(conv.messages.map((m) => m.content).join(" ")),
+      userMessages,
+      assistantMessages
+    };
+  }
   function buildFilename(conv, ext) {
     const date = conv.exportedAt.slice(0, 10);
     const platform = conv.platform;
@@ -9,6 +34,7 @@
     return `${date} ${platform}${model} ${title}.${ext}`;
   }
   function yamlFrontmatter(conv) {
+    const s = computeStats(conv);
     const lines = [
       "---",
       `title: "${conv.title.replace(/"/g, '\\"')}"`,
@@ -16,10 +42,15 @@
       `time: ${conv.exportedAt.slice(11, 19)}`,
       `platform: ${conv.platform}`
     ];
-    if (conv.model) lines.push(`model: ${conv.model}`);
+    if (conv.model) lines.push(`model: "${conv.model}"`);
     lines.push(
       `url: "${conv.url}"`,
       `messages: ${conv.messages.length}`,
+      `user_messages: ${s.userMessages}`,
+      `ai_messages: ${s.assistantMessages}`,
+      `words: ${s.totalWords}`,
+      `characters: ${s.totalChars}`,
+      `estimated_tokens: ${s.estimatedTokens}`,
       `tags: [ai-chat, ${conv.platform.toLowerCase().replace(/\s+/g, "-")}${conv.model ? ", " + conv.model.toLowerCase().replace(/[\s.]/g, "-") : ""}]`,
       "source: Complete Recall",
       "---",
@@ -28,6 +59,7 @@
     return lines.join("\n");
   }
   function toMarkdown(conv) {
+    const s = computeStats(conv);
     let md = yamlFrontmatter(conv);
     md += `# ${conv.title}
 
@@ -36,7 +68,8 @@
     if (conv.model) meta.push(`**Model:** ${conv.model}`);
     meta.push(`**URL:** ${conv.url}`);
     meta.push(`**Exported:** ${conv.exportedAt}`);
-    meta.push(`**Messages:** ${conv.messages.length}`);
+    meta.push(`**Messages:** ${conv.messages.length} (${s.userMessages} from you, ${s.assistantMessages} from AI)`);
+    meta.push(`**Words:** ${s.totalWords.toLocaleString()}  |  **Est. tokens:** ${s.estimatedTokens.toLocaleString()}  |  **Characters:** ${s.totalChars.toLocaleString()}`);
     md += meta.join("  \n") + "\n\n---\n\n";
     conv.messages.forEach((msg) => {
       const speaker = msg.role === "user" ? "You" : "AI";
@@ -51,6 +84,7 @@ ${msg.content}
     return md.trim();
   }
   function toPlainText(conv) {
+    const s = computeStats(conv);
     let text = `${conv.title}
 ${"=".repeat(conv.title.length)}
 
@@ -63,7 +97,9 @@ ${"=".repeat(conv.title.length)}
 `;
     text += `Exported: ${conv.exportedAt}
 `;
-    text += `Messages: ${conv.messages.length}
+    text += `Messages: ${conv.messages.length} (${s.userMessages} from you, ${s.assistantMessages} from AI)
+`;
+    text += `Words: ${s.totalWords.toLocaleString()}  |  Est. tokens: ${s.estimatedTokens.toLocaleString()}  |  Characters: ${s.totalChars.toLocaleString()}
 
 `;
     text += `${"\u2500".repeat(60)}
@@ -85,11 +121,13 @@ ${"\u2500".repeat(60)}
     return JSON.stringify(conv, null, 2);
   }
   function toHTML(conv) {
-    const escape = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const escape = (s2) => s2.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const s = computeStats(conv);
     const metaParts = [`${escape(conv.platform)}`];
-    if (conv.model) metaParts.push(escape(conv.model));
+    if (conv.model) metaParts.push(`<strong>${escape(conv.model)}</strong>`);
     metaParts.push(`<a href="${escape(conv.url)}">${escape(conv.url)}</a>`);
     metaParts.push(escape(conv.exportedAt));
+    metaParts.push(`${conv.messages.length} messages &bull; ${s.totalWords.toLocaleString()} words &bull; ~${s.estimatedTokens.toLocaleString()} tokens`);
     const messagesHtml = conv.messages.map((msg) => {
       const roleClass = msg.role;
       const roleName = msg.role === "user" ? "You" : "AI";
