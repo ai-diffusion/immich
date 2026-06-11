@@ -344,6 +344,18 @@ ${el.innerText}
     } else {
       messages = extractMessages(turns, config, markerFor);
     }
+    if (config.extractFileAssets) {
+      let userTurnNum = 0;
+      for (let i = 0; i < turns.length; i++) {
+        const role = config.roleOf(turns[i], i);
+        if (role === "user") userTurnNum++;
+        const fileAssets = await config.extractFileAssets(turns[i], userTurnNum, role);
+        for (const fa of fileAssets) {
+          assets.push(fa);
+          assetRegistry.set(fa.id, { url: fa.url, el: null });
+        }
+      }
+    }
     return {
       conversation: {
         title,
