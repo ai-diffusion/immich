@@ -39,6 +39,21 @@ h1 {
   border-radius: 4px;
 }
 
+#status.info {
+  color: #a5b4fc;
+  background: #1f2430;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #ccc;
+  margin: 8px 0;
+  cursor: pointer;
+}
+
 #preview {
   background: #111;
   border-radius: 6px;

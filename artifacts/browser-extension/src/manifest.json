@@ -12,7 +12,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["*://chatgpt.com/*"],
+      "matches": ["*://chatgpt.com/*", "*://codex.openai.com/*"],
       "js": ["content/chatgpt.js"]
     },
     {

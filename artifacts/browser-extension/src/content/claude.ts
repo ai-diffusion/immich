@@ -1,34 +1,16 @@
-import type { Message, Conversation } from '../lib/types';
+import { registerExtractor } from '../lib/capture';
 
-function extract(): Conversation {
-  const messages: Message[] = [];
-  const elements = document.querySelectorAll('[data-testid="human-turn"], [data-testid="ai-turn"]');
-
-  elements.forEach((el) => {
-    const testid = el.getAttribute('data-testid');
-    const role: 'user' | 'assistant' = testid === 'human-turn' ? 'user' : 'assistant';
-    const content = (el as HTMLElement).innerText.trim();
-    if (content) {
-      messages.push({ role, content });
-    }
-  });
-
-  return {
-    title: document.title,
-    platform: 'Claude',
-    url: window.location.href,
-    messages,
-    exportedAt: new Date().toISOString(),
-  };
-}
-
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.type === 'EXTRACT_CONVERSATION') {
-    try {
-      sendResponse({ conversation: extract() });
-    } catch (e) {
-      sendResponse({ error: String(e) });
-    }
-  }
-  return true;
+registerExtractor({
+  platform: 'Claude',
+  turnSelectorTiers: [
+    ['[data-testid="human-turn"]', '[data-testid="ai-turn"]'],
+    ['[data-testid="user-message"]', '.font-claude-message'],
+  ],
+  roleOf: (turn) => {
+    if (turn.matches('[data-testid="human-turn"], [data-testid="user-message"]')) return 'user';
+    return 'assistant';
+  },
+  proseSelectors: ['[class*="prose"]', '.font-claude-message', '[class*="markdown"]'],
+  scrollContainerHint: 'main',
+  assetFilter: (el) => !el.closest('button, [class*="avatar"]'),
 });

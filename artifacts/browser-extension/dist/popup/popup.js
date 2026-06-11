@@ -114,6 +114,9 @@ ${msg.content}
 
   // src/popup/popup.ts
   var currentConversation = null;
+  var currentExportDir = "chat-export";
+  var currentTabId = null;
+  var EXTRACT_TIMEOUT_MS = 9e4;
   function getExtension(format) {
     const map = {
       markdown: "md",
@@ -126,6 +129,12 @@ ${msg.content}
   function truncate(text, maxLength = 200) {
     if (text.length <= maxLength) return text;
     return text.substring(0, maxLength) + "...";
+  }
+  function setStatus(text, kind = "info") {
+    const statusEl = document.getElementById("status");
+    statusEl.textContent = text;
+    statusEl.className = kind === "info" ? "info" : "";
+    statusEl.style.display = text ? "block" : "none";
   }
   function renderPreview(conv) {
     const previewEl = document.getElementById("preview");
@@ -145,6 +154,80 @@ ${msg.content}
       previewEl.appendChild(div);
     });
   }
+  function sendToTab(tabId, payload) {
+    return new Promise((resolve, reject) => {
+      try {
+        chrome.tabs.sendMessage(tabId, payload, (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            resolve(response);
+          }
+        });
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
+  function withTimeout(promise, ms) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), ms))
+    ]);
+  }
+  function dataUrlToBlob(dataUrl) {
+    const [head, body] = dataUrl.split(",");
+    const mime = head.match(/data:([^;]+)/)?.[1] ?? "application/octet-stream";
+    const bin = atob(body);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  }
+  function downloadViaApi(url, filename) {
+    return new Promise((resolve, reject) => {
+      chrome.downloads.download({ url, filename, conflictAction: "uniquify" }, (id) => {
+        if (chrome.runtime.lastError || id === void 0) {
+          reject(new Error(chrome.runtime.lastError?.message ?? "download failed"));
+        } else {
+          resolve();
+        }
+      });
+    });
+  }
+  async function downloadAssets(assets) {
+    if (currentTabId === null) return;
+    const downloadable = assets.filter((a) => !a.unavailable);
+    let done = 0;
+    let skipped = 0;
+    for (let i = 0; i < downloadable.length; i++) {
+      const asset = downloadable[i];
+      setStatus(`Downloading asset ${i + 1}/${downloadable.length}: ${asset.name}`);
+      const resp = await sendToTab(currentTabId, {
+        type: "GET_ASSET",
+        id: asset.id
+      }).catch(() => null);
+      let url = null;
+      let objectUrl = null;
+      if (resp?.ok && resp.dataUrl) {
+        objectUrl = URL.createObjectURL(dataUrlToBlob(resp.dataUrl));
+        url = objectUrl;
+      } else if (resp?.url || /^https?:/.test(asset.url)) {
+        url = resp?.url ?? asset.url;
+      }
+      if (!url) {
+        skipped++;
+        continue;
+      }
+      try {
+        await downloadViaApi(url, `${currentExportDir}/${resp?.name ?? asset.name}`);
+        done++;
+      } catch {
+        skipped++;
+      }
+      if (objectUrl) setTimeout(() => URL.revokeObjectURL(objectUrl), 6e4);
+    }
+    setStatus(`Done. ${done} asset(s) downloaded${skipped ? `, ${skipped} skipped` : ""}.`);
+  }
   async function handleDownload() {
     if (!currentConversation) return;
     const formatSelect = document.getElementById("format");
@@ -162,6 +245,11 @@ ${msg.content}
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    const includeAssets = document.getElementById("include-assets");
+    const assets = currentConversation.assets ?? [];
+    if (includeAssets?.checked && assets.length) {
+      await downloadAssets(assets);
+    }
   }
   async function handleCopy() {
     if (!currentConversation) return;
@@ -182,7 +270,6 @@ ${msg.content}
   }
   document.addEventListener("DOMContentLoaded", async () => {
     const loadingEl = document.getElementById("loading");
-    const statusEl = document.getElementById("status");
     const previewEl = document.getElementById("preview");
     const downloadBtn = document.getElementById("download");
     const copyBtn = document.getElementById("copy");
@@ -191,36 +278,51 @@ ${msg.content}
     copyBtn.style.display = "none";
     downloadBtn.addEventListener("click", handleDownload);
     copyBtn.addEventListener("click", handleCopy);
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg?.type === "EXTRACT_PROGRESS") {
+        loadingEl.textContent = `Loading full conversation\u2026 (${msg.turnCount} messages found)`;
+      }
+    });
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const tab = tabs[0];
     if (!tab?.id) {
-      statusEl.textContent = "No active tab found.";
-      statusEl.style.display = "block";
+      setStatus("No active tab found.", "error");
       loadingEl.style.display = "none";
       return;
     }
-    chrome.tabs.sendMessage(tab.id, { type: "EXTRACT_CONVERSATION" }, (response) => {
+    currentTabId = tab.id;
+    loadingEl.textContent = "Loading full conversation\u2026";
+    let response;
+    try {
+      response = await withTimeout(
+        sendToTab(tab.id, { type: "EXTRACT_CONVERSATION" }),
+        EXTRACT_TIMEOUT_MS
+      );
+    } catch (e) {
       loadingEl.style.display = "none";
-      if (chrome.runtime.lastError) {
-        statusEl.textContent = "Open a supported AI chat page first.";
-        statusEl.style.display = "block";
-        return;
-      }
-      if (response?.error) {
-        statusEl.textContent = response.error;
-        statusEl.style.display = "block";
-        return;
-      }
-      const conv = response?.conversation;
-      if (!conv || conv.messages.length === 0) {
-        statusEl.textContent = "No conversation found on this page.";
-        statusEl.style.display = "block";
-        return;
-      }
-      currentConversation = conv;
-      renderPreview(conv);
-      downloadBtn.style.display = "block";
-      copyBtn.style.display = "block";
-    });
+      setStatus(
+        String(e).includes("timeout") ? "Timed out loading the conversation \u2014 try refreshing the page." : "Open a supported AI chat page first.",
+        "error"
+      );
+      return;
+    }
+    loadingEl.style.display = "none";
+    if (response?.error) {
+      setStatus(response.error, "error");
+      return;
+    }
+    const conv = response?.conversation;
+    if (!conv || conv.messages.length === 0) {
+      setStatus("No conversation found on this page.", "error");
+      return;
+    }
+    currentConversation = conv;
+    currentExportDir = response.exportDirName ?? "chat-export";
+    if (response.truncated) {
+      setStatus("Note: very long conversation \u2014 export may be incomplete.");
+    }
+    renderPreview(conv);
+    downloadBtn.style.display = "block";
+    copyBtn.style.display = "block";
   });
 })();
