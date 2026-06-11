@@ -38,6 +38,35 @@ function walk(node: Node, hooks: MarkdownHooks): string {
         .join('\n') + '\n\n';
     }
     case 'li': return kids();
+    case 'table': {
+      const rows = Array.from(el.querySelectorAll(
+        ':scope > thead > tr, :scope > tbody > tr, :scope > tfoot > tr, :scope > tr'
+      ));
+      if (!rows.length) return kids();
+      const mdRows: string[] = [];
+      let separatorInserted = false;
+      for (const row of rows) {
+        const cells = Array.from(row.querySelectorAll(':scope > th, :scope > td'));
+        if (!cells.length) continue;
+        const isHeader = cells.some((c) => c.tagName.toLowerCase() === 'th');
+        const rowStr = '| ' + cells
+          .map((c) => walk(c, hooks).replace(/\|/g, '\\|').replace(/\n+/g, ' ').trim())
+          .join(' | ') + ' |';
+        mdRows.push(rowStr);
+        if (isHeader && !separatorInserted) {
+          mdRows.push('| ' + cells.map(() => '---').join(' | ') + ' |');
+          separatorInserted = true;
+        }
+      }
+      if (!separatorInserted && mdRows.length > 0) {
+        // All td rows (no th) — insert separator after first row
+        const colCount = (mdRows[0].match(/\|/g)?.length ?? 2) - 1;
+        mdRows.splice(1, 0, '| ' + Array(colCount).fill('---').join(' | ') + ' |');
+      }
+      return mdRows.join('\n') + '\n\n';
+    }
+    case 'thead': case 'tbody': case 'tfoot': return kids();
+    case 'tr': case 'th': case 'td': return kids();
     case 'button': case 'svg': case 'script': case 'style': return '';
     default: return kids();
   }

@@ -403,7 +403,8 @@ ${"\u2500".repeat(60)}
         continue;
       }
       try {
-        await downloadViaApi(url, `${currentExportDir}/${resp?.name ?? asset.name}`);
+        const assetFilename = currentExportDir ? `${currentExportDir}/${resp?.name ?? asset.name}` : resp?.name ?? asset.name;
+        await downloadViaApi(url, assetFilename);
         done++;
       } catch {
         skipped++;
@@ -419,14 +420,12 @@ ${"\u2500".repeat(60)}
     const content = convert(currentConversation, format);
     const filename = getFilename(format);
     const blob = new Blob([content], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const blobUrl = URL.createObjectURL(blob);
+    try {
+      await downloadViaApi(blobUrl, filename);
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 6e4);
+    }
     const includeAssets = document.getElementById("include-assets");
     const assets = currentConversation.assets ?? [];
     if (includeAssets?.checked && assets.length) {
@@ -525,6 +524,18 @@ ${"\u2500".repeat(60)}
     }
     currentConversation = conv;
     currentExportDir = response.exportDirName ?? "chat-export";
+    if (conv.assets?.length && currentExportDir) {
+      const chatBase = buildFilename(conv, "").replace(/\.$/, "").replace(/\[.*?\]/g, "").replace(/\s+/g, " ").trim();
+      for (const asset of conv.assets) {
+        const oldRef = `./${currentExportDir}/${asset.name}`;
+        const newName = `${chatBase} \u2014 ${asset.name}`;
+        for (const msg of conv.messages) {
+          msg.content = msg.content.split(oldRef).join(newName);
+        }
+        asset.name = newName;
+      }
+      currentExportDir = "";
+    }
     if (response.truncated) {
       setStatus("Note: very long conversation \u2014 export may be incomplete.");
     }

@@ -138,7 +138,10 @@ async function downloadAssets(assets: Asset[]): Promise<void> {
     }
 
     try {
-      await downloadViaApi(url, `${currentExportDir}/${resp?.name ?? asset.name}`);
+      const assetFilename = currentExportDir
+        ? `${currentExportDir}/${resp?.name ?? asset.name}`
+        : (resp?.name ?? asset.name);
+      await downloadViaApi(url, assetFilename);
       done++;
     } catch {
       skipped++;
@@ -158,14 +161,12 @@ async function handleDownload(): Promise<void> {
   const filename = getFilename(format);
 
   const blob = new Blob([content], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  const blobUrl = URL.createObjectURL(blob);
+  try {
+    await downloadViaApi(blobUrl, filename);
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+  }
 
   const includeAssets = document.getElementById('include-assets') as HTMLInputElement;
   const assets = currentConversation.assets ?? [];
@@ -290,6 +291,25 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   currentConversation = conv;
   currentExportDir = response.exportDirName ?? 'chat-export';
+
+  // Rename assets to match chat filename format and flatten into same directory.
+  // Rewrite embedded image references in message content to use the new names.
+  if (conv.assets?.length && currentExportDir) {
+    const chatBase = buildFilename(conv, '')
+      .replace(/\.$/, '')       // remove trailing dot from empty ext
+      .replace(/\[.*?\]/g, '')  // remove [N msgs ~Ntk] — brackets break markdown links
+      .replace(/\s+/g, ' ')
+      .trim();
+    for (const asset of conv.assets) {
+      const oldRef = `./${currentExportDir}/${asset.name}`;
+      const newName = `${chatBase} — ${asset.name}`;
+      for (const msg of conv.messages) {
+        msg.content = msg.content.split(oldRef).join(newName);
+      }
+      asset.name = newName;
+    }
+    currentExportDir = ''; // flat download — chat file and images share one directory
+  }
 
   if (response.truncated) {
     setStatus('Note: very long conversation — export may be incomplete.');
