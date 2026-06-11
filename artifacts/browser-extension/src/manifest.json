@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "AI Chat Exporter",
+  "name": "Complete Recall",
   "version": "1.0.0",
-  "description": "Export AI chat conversations locally to Markdown, Text, JSON, or HTML.",
+  "description": "Export your full AI chat history locally — Markdown, Text, JSON, or HTML. Works on ChatGPT, Claude, Gemini, Grok, and Perplexity.",
   "permissions": ["activeTab", "downloads"],
   "action": {
     "default_popup": "popup/popup.html",
