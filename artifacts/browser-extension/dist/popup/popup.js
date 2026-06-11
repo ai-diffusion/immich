@@ -8,10 +8,7 @@
     return Math.round(text.length / 4);
   }
   function computeStats(conv) {
-    let totalWords = 0;
-    let totalChars = 0;
-    let userMessages = 0;
-    let assistantMessages = 0;
+    let totalWords = 0, totalChars = 0, userMessages = 0, assistantMessages = 0;
     for (const msg of conv.messages) {
       totalWords += countWords(msg.content);
       totalChars += msg.content.length;
@@ -26,15 +23,82 @@
       assistantMessages
     };
   }
+  var MODELS = [
+    { name: "Claude Sonnet 4.6", contextK: 200, inputPer1M: 3, outputPer1M: 15 },
+    { name: "Claude Opus 4.6", contextK: 200, inputPer1M: 5, outputPer1M: 25 },
+    { name: "Claude Haiku 4.5", contextK: 200, inputPer1M: 1, outputPer1M: 5 },
+    { name: "GPT-4.1", contextK: 1e3, inputPer1M: 2, outputPer1M: 8 },
+    { name: "GPT-4.1 Mini", contextK: 1e3, inputPer1M: 0.4, outputPer1M: 1.6 },
+    { name: "Gemini 2.5 Pro", contextK: 1e3, inputPer1M: 1.25, outputPer1M: 10 },
+    { name: "Grok 4.3", contextK: 1e3, inputPer1M: 1.25, outputPer1M: 2.5 },
+    { name: "Grok 4.20", contextK: 2e3, inputPer1M: 2, outputPer1M: 6 }
+  ];
+  function costTable(tokens) {
+    const rows = MODELS.map((m) => {
+      const contextTokens = m.contextK * 1e3;
+      const pct = (tokens / contextTokens * 100).toFixed(2) + "%";
+      const cost = "$" + (tokens / 1e6 * m.inputPer1M).toFixed(4);
+      const out = "$" + m.outputPer1M.toFixed(2);
+      return `| ${m.name} | ${m.contextK}K | ${pct} | ${cost} | ${out} |`;
+    });
+    return [
+      "| Model | Context window | This = % of window | Est. input cost (USD) | Output rate (per 1M) |",
+      "|---|---|---|---|---|",
+      ...rows
+    ].join("\n");
+  }
+  var MONTHS = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December"
+  ];
+  var DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  function friendlyDateTime(iso) {
+    const d = new Date(iso);
+    const day = DAYS[d.getDay()];
+    const date = d.getDate();
+    const month = MONTHS[d.getMonth()];
+    const year = d.getFullYear();
+    let hours = d.getHours();
+    const mins = String(d.getMinutes()).padStart(2, "0");
+    const ampm = hours >= 12 ? "pm" : "am";
+    hours = hours % 12 || 12;
+    return `${day}, ${date} ${month} ${year}, ${hours}.${mins}${ampm}`;
+  }
+  function shortDateTime(iso) {
+    const d = new Date(iso);
+    const date = d.getDate();
+    const month = MONTHS[d.getMonth()];
+    const year = d.getFullYear();
+    let hours = d.getHours();
+    const mins = String(d.getMinutes()).padStart(2, "0");
+    const ampm = hours >= 12 ? "pm" : "am";
+    hours = hours % 12 || 12;
+    return `${date} ${month} ${year}, ${hours}.${mins}${ampm}`;
+  }
+  function kTokens(n) {
+    return Math.round(n / 1e3) + "k";
+  }
   function buildFilename(conv, ext) {
+    const s = computeStats(conv);
     const date = conv.exportedAt.slice(0, 10);
     const platform = conv.platform;
-    const model = conv.model ? ` ${conv.model}` : "";
-    const title = conv.title.replace(/[/\\:*?"<>|]/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
-    return `${date} ${platform}${model} ${title}.${ext}`;
+    const title = conv.title.replace(/[/\\:*?"<>|—]/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
+    const exported = shortDateTime(conv.exportedAt);
+    const msgCount = conv.messages.length;
+    const tk = kTokens(s.estimatedTokens);
+    return `${date} \u2014 ${platform} \u2014 ${title} \u2014 exported ${exported} [${msgCount} msgs ~${tk} tk].${ext}`;
   }
-  function yamlFrontmatter(conv) {
-    const s = computeStats(conv);
+  function yamlFrontmatter(conv, s) {
     const lines = [
       "---",
       `title: "${conv.title.replace(/"/g, '\\"')}"`,
@@ -58,58 +122,86 @@
     );
     return lines.join("\n");
   }
+  function preview(text, max = 80) {
+    const first = text.trim().split("\n")[0].replace(/[#*`_]/g, "").trim();
+    return first.length > max ? first.slice(0, max - 1) + "\u2026" : first;
+  }
   function toMarkdown(conv) {
     const s = computeStats(conv);
-    let md = yamlFrontmatter(conv);
+    const aiName = conv.platform;
+    let md = yamlFrontmatter(conv, s);
     md += `# ${conv.title}
 
 `;
-    const meta = [`**Platform:** ${conv.platform}`];
-    if (conv.model) meta.push(`**Model:** ${conv.model}`);
-    meta.push(`**URL:** ${conv.url}`);
-    meta.push(`**Exported:** ${conv.exportedAt}`);
-    meta.push(`**Messages:** ${conv.messages.length} (${s.userMessages} from you, ${s.assistantMessages} from AI)`);
-    meta.push(`**Words:** ${s.totalWords.toLocaleString()}  |  **Est. tokens:** ${s.estimatedTokens.toLocaleString()}  |  **Characters:** ${s.totalChars.toLocaleString()}`);
-    md += meta.join("  \n") + "\n\n---\n\n";
-    conv.messages.forEach((msg) => {
-      const speaker = msg.role === "user" ? "You" : "AI";
-      md += `**${speaker}:**
-
-${msg.content}
-
----
+    md += `## File info
 
 `;
+    md += `- **Source:** ${conv.platform}`;
+    if (conv.model) md += ` (${conv.model})`;
+    md += ` \u2014 ${conv.url}
+`;
+    md += `- **Exported:** ${friendlyDateTime(conv.exportedAt)}
+
+`;
+    md += `## Size
+
+`;
+    md += `- **Messages:** ${conv.messages.length} (${s.userMessages} from you, ${s.assistantMessages} from ${aiName})
+`;
+    md += `- **Words:** ${s.totalWords.toLocaleString()}
+`;
+    md += `- **Characters:** ${s.totalChars.toLocaleString()}
+`;
+    md += `- **Estimated tokens:** ~${s.estimatedTokens.toLocaleString()} *(rough estimate, ~4 chars/token; exact count varies by model)*
+
+`;
+    md += `## Cost / context-fit if pasted as context elsewhere
+
+`;
+    md += costTable(s.estimatedTokens) + "\n\n";
+    md += `*Prices verified June 2026. Subscription plans (Claude Pro, ChatGPT Plus, Grok Premium, Gemini Advanced) are flat-rate, so per-chat cost via those is $0.*
+
+`;
+    let exchangeNum = 0;
+    conv.messages.forEach((msg) => {
+      if (msg.role === "user") exchangeNum++;
+      const speaker = msg.role === "user" ? "You" : aiName;
+      const prev = preview(msg.content);
+      md += `## ${speaker} \xB7 ${exchangeNum} \xB7 ${prev}
+
+`;
+      md += msg.content.trim() + "\n\n";
     });
     return md.trim();
   }
   function toPlainText(conv) {
     const s = computeStats(conv);
     let text = `${conv.title}
-${"=".repeat(conv.title.length)}
+${"=".repeat(Math.min(conv.title.length, 60))}
 
 `;
-    text += `Platform: ${conv.platform}
+    text += `Platform: ${conv.platform}`;
+    if (conv.model) text += ` (${conv.model})`;
+    text += `
+URL: ${conv.url}
 `;
-    if (conv.model) text += `Model: ${conv.model}
+    text += `Exported: ${friendlyDateTime(conv.exportedAt)}
 `;
-    text += `URL: ${conv.url}
+    text += `Messages: ${conv.messages.length} (${s.userMessages} from you, ${s.assistantMessages} from ${conv.platform})
 `;
-    text += `Exported: ${conv.exportedAt}
-`;
-    text += `Messages: ${conv.messages.length} (${s.userMessages} from you, ${s.assistantMessages} from AI)
-`;
-    text += `Words: ${s.totalWords.toLocaleString()}  |  Est. tokens: ${s.estimatedTokens.toLocaleString()}  |  Characters: ${s.totalChars.toLocaleString()}
+    text += `Words: ${s.totalWords.toLocaleString()}  |  Est. tokens: ~${s.estimatedTokens.toLocaleString()}  |  Characters: ${s.totalChars.toLocaleString()}
 
 `;
     text += `${"\u2500".repeat(60)}
 
 `;
+    let exchangeNum = 0;
     conv.messages.forEach((msg) => {
-      const speaker = msg.role === "user" ? "You" : "AI";
-      text += `${speaker}:
+      if (msg.role === "user") exchangeNum++;
+      const speaker = msg.role === "user" ? "You" : conv.platform;
+      text += `${speaker} \xB7 ${exchangeNum}:
 
-${msg.content}
+${msg.content.trim()}
 
 ${"\u2500".repeat(60)}
 
@@ -118,49 +210,71 @@ ${"\u2500".repeat(60)}
     return text.trim();
   }
   function toJSON(conv) {
-    return JSON.stringify(conv, null, 2);
+    const s = computeStats(conv);
+    return JSON.stringify({ ...conv, stats: s }, null, 2);
   }
   function toHTML(conv) {
-    const escape = (s2) => s2.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const esc = (s2) => s2.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     const s = computeStats(conv);
-    const metaParts = [`${escape(conv.platform)}`];
-    if (conv.model) metaParts.push(`<strong>${escape(conv.model)}</strong>`);
-    metaParts.push(`<a href="${escape(conv.url)}">${escape(conv.url)}</a>`);
-    metaParts.push(escape(conv.exportedAt));
-    metaParts.push(`${conv.messages.length} messages &bull; ${s.totalWords.toLocaleString()} words &bull; ~${s.estimatedTokens.toLocaleString()} tokens`);
+    const aiName = conv.platform;
+    let exchangeNum = 0;
     const messagesHtml = conv.messages.map((msg) => {
+      if (msg.role === "user") exchangeNum++;
       const roleClass = msg.role;
-      const roleName = msg.role === "user" ? "You" : "AI";
-      const contentHtml = escape(msg.content).replace(/\n/g, "<br>");
+      const roleName = msg.role === "user" ? "You" : aiName;
+      const contentHtml = esc(msg.content).replace(/\n/g, "<br>");
       return `
       <div class="message ${roleClass}">
-        <div class="label">${roleName}</div>
+        <div class="label">${roleName} \xB7 ${exchangeNum}</div>
         <div class="content">${contentHtml}</div>
       </div>`;
+    }).join("\n");
+    const costRowsHtml = MODELS.map((m) => {
+      const contextTokens = m.contextK * 1e3;
+      const pct = (s.estimatedTokens / contextTokens * 100).toFixed(2) + "%";
+      const cost = "$" + (s.estimatedTokens / 1e6 * m.inputPer1M).toFixed(4);
+      return `<tr><td>${esc(m.name)}</td><td>${m.contextK}K</td><td>${pct}</td><td>${cost}</td><td>$${m.outputPer1M.toFixed(2)}</td></tr>`;
     }).join("\n");
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${escape(conv.title)}</title>
+  <title>${esc(conv.title)}</title>
   <style>
-    body { background: #1a1a1a; color: #e8e8e8; font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 24px; line-height: 1.6; }
-    h1 { color: #a5b4fc; font-size: 1.4rem; margin-bottom: 6px; }
-    .meta { font-size: 12px; color: #666; margin-bottom: 24px; }
-    .meta a { color: #6366f1; }
-    .message { margin-bottom: 20px; padding: 14px 16px; border-radius: 8px; }
-    .message.user { background: #1e1e2e; border-left: 3px solid #6366f1; }
-    .message.assistant { background: #111; border-left: 3px solid #22d3ee; }
-    .label { font-size: 11px; font-weight: 700; text-transform: uppercase; opacity: 0.6; margin-bottom: 8px; }
-    .message.user .label { color: #a5b4fc; }
-    .message.assistant .label { color: #67e8f9; }
-    .content { font-size: 14px; }
+    body { background:#1a1a1a; color:#e8e8e8; font-family:sans-serif; max-width:800px; margin:0 auto; padding:24px; line-height:1.6; }
+    h1 { color:#a5b4fc; font-size:1.4rem; margin-bottom:6px; }
+    h2 { color:#888; font-size:.85rem; font-weight:600; text-transform:uppercase; letter-spacing:.5px; margin:24px 0 8px; }
+    .meta { font-size:12px; color:#666; margin-bottom:8px; }
+    .meta a { color:#6366f1; }
+    table { width:100%; border-collapse:collapse; font-size:12px; margin:12px 0; }
+    th,td { padding:6px 10px; text-align:left; border-bottom:1px solid #333; }
+    th { color:#a5b4fc; }
+    .message { margin-bottom:16px; padding:12px 16px; border-radius:8px; }
+    .message.user { background:#1e1e2e; border-left:3px solid #6366f1; }
+    .message.assistant { background:#111; border-left:3px solid #22d3ee; }
+    .label { font-size:11px; font-weight:700; text-transform:uppercase; opacity:.6; margin-bottom:8px; color:#a5b4fc; }
+    .message.assistant .label { color:#67e8f9; }
+    .content { font-size:14px; }
   </style>
 </head>
 <body>
-  <h1>${escape(conv.title)}</h1>
-  <div class="meta">${metaParts.join(" &bull; ")}</div>
+  <h1>${esc(conv.title)}</h1>
+  <h2>File info</h2>
+  <div class="meta"><strong>Source:</strong> ${esc(conv.platform)}${conv.model ? " (" + esc(conv.model) + ")" : ""} \u2014 <a href="${esc(conv.url)}">${esc(conv.url)}</a></div>
+  <div class="meta"><strong>Exported:</strong> ${esc(friendlyDateTime(conv.exportedAt))}</div>
+  <h2>Size</h2>
+  <div class="meta">
+    ${conv.messages.length} messages (${s.userMessages} from you, ${s.assistantMessages} from ${esc(aiName)}) &bull;
+    ${s.totalWords.toLocaleString()} words &bull; ~${s.estimatedTokens.toLocaleString()} tokens &bull; ${s.totalChars.toLocaleString()} chars
+  </div>
+  <h2>Cost / context-fit if pasted as context elsewhere</h2>
+  <table>
+    <tr><th>Model</th><th>Context window</th><th>This = % of window</th><th>Est. input cost</th><th>Output rate (per 1M)</th></tr>
+    ${costRowsHtml}
+  </table>
+  <p style="font-size:11px;color:#555;"><em>Prices verified June 2026. Subscription plans are flat-rate, so per-chat cost via those is $0.</em></p>
+  <h2>Conversation</h2>
   ${messagesHtml}
 </body>
 </html>`;
