@@ -344,6 +344,18 @@ ${el.innerText}
     } else {
       messages = extractMessages(turns, config, markerFor);
     }
+    if (config.extractFileAssets) {
+      let userTurnNum = 0;
+      for (let i = 0; i < turns.length; i++) {
+        const role = config.roleOf(turns[i], i);
+        if (role === "user") userTurnNum++;
+        const fileAssets = await config.extractFileAssets(turns[i], userTurnNum, role);
+        for (const fa of fileAssets) {
+          assets.push(fa);
+          assetRegistry.set(fa.id, { url: fa.url, el: null });
+        }
+      }
+    }
     return {
       conversation: {
         title,
@@ -373,11 +385,16 @@ ${el.innerText}
   }
 
   // src/content/chatgpt.ts
+  var sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
   var ATTACH_SEL = '[class*="attachment"], [class*="file-block"], [class*="paste"], [data-testid*="file"], pre';
+  var FILE_CHIP_SEL = '[data-testid*="file"], [class*="file-block"], [class*="attachment"]:not([class*="image"]):not(button)';
   function fullTextOf(el) {
     const visible = el.innerText?.trim() ?? "";
     const all = el.textContent?.trim() ?? "";
     return all.length > visible.length + 200 ? all : visible;
+  }
+  function sanitizeFilename(name) {
+    return name.replace(/[/\\:*?"<>|]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120) || "file";
   }
   function attachmentTexts(turn, proseRoots) {
     const out = [];
@@ -391,12 +408,69 @@ ${el.innerText}
       const isChip = att.matches('[data-testid*="file"], [class*="attachment"], [class*="paste"]') || !!att.closest('[data-testid*="file"], [class*="attachment"]');
       if (isChip && text.length < 200) {
         const name = text.split("\n")[0].slice(0, 80) || "attachment";
-        out.push(`[Attached: ${name} \u2014 full content not available in page]`);
+        out.push(`[File: ${name}]`);
       } else if (text.length >= 200) {
         out.push("```\n" + text + "\n```");
       }
     });
     return out;
+  }
+  async function extractChipContent(chip) {
+    const visible = chip.innerText?.trim() ?? "";
+    const hidden = chip.textContent?.trim() ?? "";
+    if (hidden.length > visible.length + 200) {
+      return { name: sanitizeFilename(visible.split("\n")[0] || "attachment"), content: hidden };
+    }
+    const chipLabel = visible.split("\n")[0].trim().slice(0, 120) || "attachment";
+    chip.click();
+    let dialog = null;
+    for (let i = 0; i < 10; i++) {
+      await sleep2(250);
+      dialog = document.querySelector(
+        '[role="dialog"], [data-testid="file-viewer-modal"], [class*="FileViewer"], [class*="file-viewer"], [class*="modal"][class*="open"]'
+      );
+      if (dialog) break;
+    }
+    if (!dialog) return null;
+    const contentEl = dialog.querySelector('pre, [class*="whitespace-pre"], code') ?? dialog.querySelector('[class*="body"], .overflow-y-auto, [class*="content"]') ?? dialog;
+    const rawContent = contentEl.innerText?.trim() ?? "";
+    const closeBtn = dialog.querySelector(
+      'button[aria-label*="close" i], button[aria-label*="dismiss" i], [data-testid*="close"]'
+    );
+    if (closeBtn) {
+      closeBtn.click();
+    } else {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true, cancelable: true })
+      );
+    }
+    await sleep2(300);
+    if (!rawContent || rawContent.length < 10) return null;
+    const lines = rawContent.split("\n");
+    const content = lines[0].includes(chipLabel.replace(/\.[^.]+$/, "").slice(0, 30)) ? lines.slice(1).join("\n").trim() : rawContent;
+    return { name: sanitizeFilename(chipLabel), content };
+  }
+  async function extractFileAssets(turn, userTurnNum, role) {
+    if (role !== "user") return [];
+    const chips = Array.from(turn.querySelectorAll(FILE_CHIP_SEL)).filter((el) => !el.closest('button[aria-label], button[class*="model"]')).slice(0, 5);
+    const results = [];
+    for (const chip of chips) {
+      const label = chip.innerText?.trim() ?? "";
+      if (/\.(png|jpg|jpeg|gif|webp|svg|bmp)$/i.test(label)) continue;
+      const extracted = await extractChipContent(chip);
+      if (!extracted) continue;
+      const id = `filechip-${userTurnNum}-${results.length}`;
+      const blob = new Blob([extracted.content], { type: "text/plain" });
+      const blobUrl = URL.createObjectURL(blob);
+      results.push({
+        id,
+        kind: "file",
+        url: blobUrl,
+        name: `prompt-${userTurnNum} \u2014 ${extracted.name}`,
+        messageIndex: userTurnNum
+      });
+    }
+    return results;
   }
   registerExtractor({
     platform: "ChatGPT",
@@ -432,6 +506,7 @@ ${el.innerText}
       return null;
     },
     extractAttachmentTexts: attachmentTexts,
+    extractFileAssets,
     assetFilter: (el) => !el.closest('button, [class*="avatar"]')
   });
 })();

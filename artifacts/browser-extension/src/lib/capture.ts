@@ -11,6 +11,13 @@ export interface PlatformConfig {
   titleOf?: () => string;
   modelOf?: () => string | null;
   extractAttachmentTexts?: (turn: Element, proseRoots: Element[]) => string[];
+  // Async hook: click-to-open file chips and extract their full text content.
+  // userTurnNum is the 1-indexed count of user turns seen so far (for labelling).
+  extractFileAssets?: (
+    turn: Element,
+    userTurnNum: number,
+    role: 'user' | 'assistant' | null,
+  ) => Promise<Asset[]>;
   assetFilter?: (el: Element) => boolean;
 }
 
@@ -321,6 +328,20 @@ async function captureConversation(config: PlatformConfig): Promise<{
     messages = mergeWindows(windows);
   } else {
     messages = extractMessages(turns, config, markerFor);
+  }
+
+  // Click-to-extract file chips (pasted text, uploaded docs) for each user turn.
+  if (config.extractFileAssets) {
+    let userTurnNum = 0;
+    for (let i = 0; i < turns.length; i++) {
+      const role = config.roleOf(turns[i], i);
+      if (role === 'user') userTurnNum++;
+      const fileAssets = await config.extractFileAssets(turns[i], userTurnNum, role);
+      for (const fa of fileAssets) {
+        assets.push(fa);
+        assetRegistry.set(fa.id, { url: fa.url, el: null });
+      }
+    }
   }
 
   return {
