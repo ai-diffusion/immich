@@ -18,8 +18,22 @@ function walk(node: Node, hooks: MarkdownHooks): string {
     case 'h6': return `###### ${kids().trim()}\n\n`;
     case 'strong': case 'b': return `**${kids()}**`;
     case 'em': case 'i': return `_${kids()}_`;
-    case 'code': return el.closest('pre') ? kids() : `\`${kids()}\``;
-    case 'pre': return `\`\`\`\n${(el as HTMLElement).innerText}\n\`\`\`\n\n`;
+    case 'code': {
+      if (el.closest('pre')) return kids();
+      // Standalone code block (ChatGPT renders <code> without a <pre> wrapper).
+      const text = (el as HTMLElement).innerText ?? '';
+      if (text.includes('\n')) {
+        const lang = el.className.match(/language-(\w+)/)?.[1] ?? '';
+        return `\`\`\`${lang}\n${text.trimEnd()}\n\`\`\`\n\n`;
+      }
+      return `\`${kids()}\``;
+    }
+    case 'pre': {
+      const codeEl = (el as HTMLElement).querySelector('code');
+      const text = codeEl ? codeEl.innerText : (el as HTMLElement).innerText;
+      const lang = (codeEl?.className ?? el.className).match(/language-(\w+)/)?.[1] ?? '';
+      return `\`\`\`${lang}\n${text.trimEnd()}\n\`\`\`\n\n`;
+    }
     case 'p': return `${kids()}\n\n`;
     case 'br': return '\n';
     case 'hr': return '---\n\n';

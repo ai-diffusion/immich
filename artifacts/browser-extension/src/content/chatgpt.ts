@@ -27,7 +27,7 @@ function attachmentTexts(turn: Element, proseRoots: Element[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   turn.querySelectorAll<HTMLElement>(ATTACH_SEL).forEach((att) => {
-    if (proseRoots.some((p) => p !== turn && p.contains(att))) return;
+    if (proseRoots.some((p) => p.contains(att))) return;
     if (att.closest('button')) return;
     const text = fullTextOf(att);
     if (!text || seen.has(text)) return;
@@ -90,9 +90,10 @@ async function extractChipContent(
   if (closeBtn) {
     closeBtn.click();
   } else {
-    document.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }),
-    );
+    // Try dispatching Escape on the dialog itself first; bubble to document as fallback.
+    const escapeEvent = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true });
+    dialog.dispatchEvent(escapeEvent);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
   }
   await sleep(300);
 
@@ -160,11 +161,16 @@ registerExtractor({
     return role === 'user' || role === 'assistant' ? role : null;
   },
   proseSelectors: [
+    // Assistant turn: primary containers
     '.prose',
     '.markdown',
     '[class*="prose"]',
     '[class*="markdown"]',
+    // User turn: plain text message wrapper
     '[class*="whitespace-pre-wrap"]',
+    // Fallback: direct message content container (both roles)
+    '[data-message-content]',
+    '[class*="message-content"]',
   ],
   scrollContainerHint: 'main',
   modelOf: () => {

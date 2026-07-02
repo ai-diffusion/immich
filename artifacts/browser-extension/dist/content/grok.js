@@ -39,14 +39,29 @@
       case "em":
       case "i":
         return `_${kids()}_`;
-      case "code":
-        return el.closest("pre") ? kids() : `\`${kids()}\``;
-      case "pre":
-        return `\`\`\`
-${el.innerText}
+      case "code": {
+        if (el.closest("pre")) return kids();
+        const text = el.innerText ?? "";
+        if (text.includes("\n")) {
+          const lang = el.className.match(/language-(\w+)/)?.[1] ?? "";
+          return `\`\`\`${lang}
+${text.trimEnd()}
 \`\`\`
 
 `;
+        }
+        return `\`${kids()}\``;
+      }
+      case "pre": {
+        const codeEl = el.querySelector("code");
+        const text = codeEl ? codeEl.innerText : el.innerText;
+        const lang = (codeEl?.className ?? el.className).match(/language-(\w+)/)?.[1] ?? "";
+        return `\`\`\`${lang}
+${text.trimEnd()}
+\`\`\`
+
+`;
+      }
       case "p":
         return `${kids()}
 

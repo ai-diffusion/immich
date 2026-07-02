@@ -39,14 +39,29 @@
       case "em":
       case "i":
         return `_${kids()}_`;
-      case "code":
-        return el.closest("pre") ? kids() : `\`${kids()}\``;
-      case "pre":
-        return `\`\`\`
-${el.innerText}
+      case "code": {
+        if (el.closest("pre")) return kids();
+        const text = el.innerText ?? "";
+        if (text.includes("\n")) {
+          const lang = el.className.match(/language-(\w+)/)?.[1] ?? "";
+          return `\`\`\`${lang}
+${text.trimEnd()}
 \`\`\`
 
 `;
+        }
+        return `\`${kids()}\``;
+      }
+      case "pre": {
+        const codeEl = el.querySelector("code");
+        const text = codeEl ? codeEl.innerText : el.innerText;
+        const lang = (codeEl?.className ?? el.className).match(/language-(\w+)/)?.[1] ?? "";
+        return `\`\`\`${lang}
+${text.trimEnd()}
+\`\`\`
+
+`;
+      }
       case "p":
         return `${kids()}
 
@@ -400,7 +415,7 @@ ${el.innerText}
     const out = [];
     const seen = /* @__PURE__ */ new Set();
     turn.querySelectorAll(ATTACH_SEL).forEach((att) => {
-      if (proseRoots.some((p) => p !== turn && p.contains(att))) return;
+      if (proseRoots.some((p) => p.contains(att))) return;
       if (att.closest("button")) return;
       const text = fullTextOf(att);
       if (!text || seen.has(text)) return;
@@ -440,9 +455,9 @@ ${el.innerText}
     if (closeBtn) {
       closeBtn.click();
     } else {
-      document.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true, cancelable: true })
-      );
+      const escapeEvent = new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true, cancelable: true });
+      dialog.dispatchEvent(escapeEvent);
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true, cancelable: true }));
     }
     await sleep2(300);
     if (!rawContent || rawContent.length < 10) return null;
@@ -484,11 +499,16 @@ ${el.innerText}
       return role === "user" || role === "assistant" ? role : null;
     },
     proseSelectors: [
+      // Assistant turn: primary containers
       ".prose",
       ".markdown",
       '[class*="prose"]',
       '[class*="markdown"]',
-      '[class*="whitespace-pre-wrap"]'
+      // User turn: plain text message wrapper
+      '[class*="whitespace-pre-wrap"]',
+      // Fallback: direct message content container (both roles)
+      "[data-message-content]",
+      '[class*="message-content"]'
     ],
     scrollContainerHint: "main",
     modelOf: () => {
