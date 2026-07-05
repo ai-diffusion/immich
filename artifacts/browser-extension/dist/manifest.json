@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "Complete Recall",
+  "version": "1.0.0",
+  "description": "Export your full AI chat history locally — Markdown, Text, JSON, or HTML. Works on ChatGPT, Claude, Gemini, Grok, and Perplexity.",
+  "permissions": ["activeTab", "downloads"],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "48": "icons/icon48.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://chatgpt.com/*", "*://codex.openai.com/*"],
+      "js": ["content/chatgpt.js"]
+    },
+    {
+      "matches": ["*://claude.ai/*"],
+      "js": ["content/claude.js"]
+    },
+    {
+      "matches": ["*://grok.com/*", "*://grok.x.ai/*", "*://x.com/i/grok*"],
+      "js": ["content/grok.js"]
+    },
+    {
+      "matches": ["*://gemini.google.com/*"],
+      "js": ["content/gemini.js"]
+    },
+    {
+      "matches": ["*://perplexity.ai/*", "*://www.perplexity.ai/*"],
+      "js": ["content/perplexity.js"]
+    }
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "scripts": ["background/service-worker.js"]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "ai-chat-exporter@browser-ext",
+      "strict_min_version": "109.0"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
