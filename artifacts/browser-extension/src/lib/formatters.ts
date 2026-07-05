@@ -53,17 +53,82 @@ const MODELS: ModelInfo[] = [
   { name: 'Grok 4.20',         contextK: 2000, inputPer1M: 2.00,  outputPer1M:  6.00 },
 ];
 
-function costTable(tokens: number): string {
+interface TokenBreakdown {
+  inputTokens: number;          // sum of your (user) message tokens, single pass
+  outputTokens: number;         // sum of the AI's message tokens
+  compoundedInputTokens: number; // input actually billed: context resent each turn
+  singlePassTokens: number;     // input + output, one pass (for context-window %)
+}
+
+// Real API billing has two effects the naive "whole convo × input rate" misses:
+// output is billed at the (higher) output rate, and every AI reply resends the
+// entire prior thread as input — so input compounds across turns.
+function computeTokenBreakdown(conv: Conversation): TokenBreakdown {
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let compoundedInputTokens = 0;
+  let runningContext = 0;
+  for (const msg of conv.messages) {
+    const t = estimateTokens(msg.content);
+    if (msg.role === 'user') {
+      inputTokens += t;
+      runningContext += t;
+    } else {
+      outputTokens += t;
+      compoundedInputTokens += runningContext; // context sent to generate this reply
+      runningContext += t;
+    }
+  }
+  return {
+    inputTokens,
+    outputTokens,
+    compoundedInputTokens,
+    singlePassTokens: inputTokens + outputTokens,
+  };
+}
+
+function trueCost(b: TokenBreakdown, m: ModelInfo): number {
+  return (b.compoundedInputTokens / 1_000_000) * m.inputPer1M
+       + (b.outputTokens / 1_000_000) * m.outputPer1M;
+}
+
+function defaultModelFor(platform: string): ModelInfo {
+  const p = platform.toLowerCase();
+  if (p.includes('claude')) return MODELS.find((m) => m.name === 'Claude Sonnet 4.6')!;
+  if (p.includes('gemini')) return MODELS.find((m) => m.name === 'Gemini 2.5 Pro')!;
+  if (p.includes('grok')) return MODELS.find((m) => m.name === 'Grok 4.3')!;
+  return MODELS.find((m) => m.name === 'GPT-4.1')!; // ChatGPT / GPT / OpenAI / other
+}
+
+// Best-effort match of the conversation's actual model string to our rate table.
+function matchModel(conv: Conversation): ModelInfo {
+  if (conv.model) {
+    const needle = conv.model.toLowerCase().replace(/[\s._-]/g, '');
+    const hit = MODELS.find((m) => {
+      const hay = m.name.toLowerCase().replace(/[\s._-]/g, '');
+      return hay.includes(needle) || needle.includes(hay);
+    });
+    if (hit) return hit;
+  }
+  return defaultModelFor(conv.platform);
+}
+
+function fmtUsd(n: number): string {
+  if (n === 0) return '$0.00';
+  if (n < 0.01) return '$' + n.toFixed(4);
+  return '$' + n.toFixed(2);
+}
+
+function costTable(conv: Conversation, b: TokenBreakdown): string {
   const rows = MODELS.map((m) => {
     const contextTokens = m.contextK * 1000;
-    const pct = ((tokens / contextTokens) * 100).toFixed(2) + '%';
-    const cost = '$' + ((tokens / 1_000_000) * m.inputPer1M).toFixed(4);
-    const out = '$' + m.outputPer1M.toFixed(2);
-    return `| ${m.name} | ${m.contextK}K | ${pct} | ${cost} | ${out} |`;
+    const pct = ((b.singlePassTokens / contextTokens) * 100).toFixed(2) + '%';
+    const cost = fmtUsd(trueCost(b, m));
+    return `| ${m.name} | ${m.contextK}K | ${pct} | ${cost} |`;
   });
   return [
-    '| Model | Context window | This = % of window | Est. input cost (USD) | Output rate (per 1M) |',
-    '|---|---|---|---|---|',
+    '| Model | Context window | Convo = % of window | True cost (in+out) |',
+    '|---|---|---|---|',
     ...rows,
   ].join('\n');
 }
@@ -123,6 +188,9 @@ export function buildFilename(conv: Conversation, ext: string): string {
 // ── YAML frontmatter ───────────────────────────────────────────────────────
 
 function yamlFrontmatter(conv: Conversation, s: ConvStats): string {
+  const b = computeTokenBreakdown(conv);
+  const m = matchModel(conv);
+  const cost = trueCost(b, m);
   const lines = [
     '---',
     `title: "${conv.title.replace(/"/g, '\\"')}"`,
@@ -139,6 +207,10 @@ function yamlFrontmatter(conv: Conversation, s: ConvStats): string {
     `words: ${s.totalWords}`,
     `characters: ${s.totalChars}`,
     `estimated_tokens: ${s.estimatedTokens}`,
+    `estimated_input_tokens: ${b.inputTokens}`,
+    `estimated_output_tokens: ${b.outputTokens}`,
+    `est_api_cost_usd: ${cost.toFixed(4)}`,
+    `est_api_model: "${m.name}"`,
     `tags: [ai-chat, ${conv.platform.toLowerCase().replace(/\s+/g, '-')}${conv.model ? ', ' + conv.model.toLowerCase().replace(/[\s.]/g, '-') : ''}]`,
     'source: Complete Recall',
     '---',
@@ -177,10 +249,15 @@ export function toMarkdown(conv: Conversation): string {
   md += `- **Characters:** ${s.totalChars.toLocaleString()}\n`;
   md += `- **Estimated tokens:** ~${s.estimatedTokens.toLocaleString()} *(rough estimate, ~4 chars/token; exact count varies by model)*\n\n`;
 
-  // ── Cost / context-fit table ──
-  md += `## Cost / context-fit if pasted as context elsewhere\n\n`;
-  md += costTable(s.estimatedTokens) + '\n\n';
-  md += `*Prices verified June 2026. Subscription plans (Claude Pro, ChatGPT Plus, Grok Premium, Gemini Advanced) are flat-rate, so per-chat cost via those is $0.*\n\n`;
+  // ── Cost (API-equivalent) ──
+  const b = computeTokenBreakdown(conv);
+  const actual = matchModel(conv);
+  md += `## Cost (API-equivalent)\n\n`;
+  md += `- **This conversation via ${actual.name} API: ≈ ${fmtUsd(trueCost(b, actual))}** — input ~${b.compoundedInputTokens.toLocaleString()} tk (context resent each turn), output ~${b.outputTokens.toLocaleString()} tk\n`;
+  md += `- *If this ran on a flat-rate subscription (Claude Pro, ChatGPT Plus, Grok Premium, Gemini Advanced) your out-of-pocket was likely $0. This is the metered-API equivalent.*\n\n`;
+  md += `### If this conversation had run on other models\n\n`;
+  md += costTable(conv, b) + '\n\n';
+  md += `*Multi-turn context compounding included; ~4 chars/token estimate. Prices verified June 2026.*\n\n`;
 
   // ── Conversation turns with numbered headings ──
   let exchangeNum = 0;
@@ -205,7 +282,10 @@ export function toPlainText(conv: Conversation): string {
   text += `\nURL: ${conv.url}\n`;
   text += `Exported: ${friendlyDateTime(conv.exportedAt)}\n`;
   text += `Messages: ${conv.messages.length} (${s.userMessages} from you, ${s.assistantMessages} from ${conv.platform})\n`;
-  text += `Words: ${s.totalWords.toLocaleString()}  |  Est. tokens: ~${s.estimatedTokens.toLocaleString()}  |  Characters: ${s.totalChars.toLocaleString()}\n\n`;
+  text += `Words: ${s.totalWords.toLocaleString()}  |  Est. tokens: ~${s.estimatedTokens.toLocaleString()}  |  Characters: ${s.totalChars.toLocaleString()}\n`;
+  const bt = computeTokenBreakdown(conv);
+  const mt = matchModel(conv);
+  text += `Est. API cost via ${mt.name}: ~${fmtUsd(trueCost(bt, mt))} (input ~${bt.compoundedInputTokens.toLocaleString()} tk compounded, output ~${bt.outputTokens.toLocaleString()} tk)\n\n`;
   text += `${'─'.repeat(60)}\n\n`;
 
   let exchangeNum = 0;
@@ -247,11 +327,13 @@ export function toHTML(conv: Conversation): string {
       </div>`;
   }).join('\n');
 
+  const b = computeTokenBreakdown(conv);
+  const actual = matchModel(conv);
   const costRowsHtml = MODELS.map((m) => {
     const contextTokens = m.contextK * 1000;
-    const pct = ((s.estimatedTokens / contextTokens) * 100).toFixed(2) + '%';
-    const cost = '$' + ((s.estimatedTokens / 1_000_000) * m.inputPer1M).toFixed(4);
-    return `<tr><td>${esc(m.name)}</td><td>${m.contextK}K</td><td>${pct}</td><td>${cost}</td><td>$${m.outputPer1M.toFixed(2)}</td></tr>`;
+    const pct = ((b.singlePassTokens / contextTokens) * 100).toFixed(2) + '%';
+    const cost = fmtUsd(trueCost(b, m));
+    return `<tr><td>${esc(m.name)}</td><td>${m.contextK}K</td><td>${pct}</td><td>${cost}</td></tr>`;
   }).join('\n');
 
   return `<!DOCTYPE html>
@@ -287,12 +369,13 @@ export function toHTML(conv: Conversation): string {
     ${conv.messages.length} messages (${s.userMessages} from you, ${s.assistantMessages} from ${esc(aiName)}) &bull;
     ${s.totalWords.toLocaleString()} words &bull; ~${s.estimatedTokens.toLocaleString()} tokens &bull; ${s.totalChars.toLocaleString()} chars
   </div>
-  <h2>Cost / context-fit if pasted as context elsewhere</h2>
+  <h2>Cost (API-equivalent)</h2>
+  <div class="meta"><strong>This conversation via ${esc(actual.name)} API: &asymp; ${fmtUsd(trueCost(b, actual))}</strong> &bull; input ~${b.compoundedInputTokens.toLocaleString()} tk (context resent each turn), output ~${b.outputTokens.toLocaleString()} tk</div>
   <table>
-    <tr><th>Model</th><th>Context window</th><th>This = % of window</th><th>Est. input cost</th><th>Output rate (per 1M)</th></tr>
+    <tr><th>Model</th><th>Context window</th><th>Convo = % of window</th><th>True cost (in+out)</th></tr>
     ${costRowsHtml}
   </table>
-  <p style="font-size:11px;color:#555;"><em>Prices verified June 2026. Subscription plans are flat-rate, so per-chat cost via those is $0.</em></p>
+  <p style="font-size:11px;color:#555;"><em>Multi-turn context compounding included; ~4 chars/token estimate. Flat-rate subscriptions = $0 out of pocket. Prices verified June 2026.</em></p>
   <h2>Conversation</h2>
   ${messagesHtml}
 </body>
